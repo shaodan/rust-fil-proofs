@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use anyhow::ensure;
 use byteorder::{ByteOrder, LittleEndian};
 use generic_array::typenum::Unsigned;
-use log::trace;
+use log::{error, trace};
 use paired::bls12_381::Fr;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -364,6 +364,7 @@ impl<'a, Tree: 'a + MerkleTreeTrait> ProofScheme<'a> for FallbackPoSt<'a, Tree> 
         let num_sectors_per_chunk = pub_params.sector_count;
         let num_sectors = pub_inputs.sectors.len();
 
+        let mut verify_ok = true;
         ensure!(
             num_sectors <= num_sectors_per_chunk * partition_proofs.len(),
             "inconsistent number of sectors: {} > {} * {}",
@@ -410,7 +411,9 @@ impl<'a, Tree: 'a + MerkleTreeTrait> ProofScheme<'a> for FallbackPoSt<'a, Tree> 
                     &comm_r_last,
                 )) != AsRef::<[u8]>::as_ref(comm_r)
                 {
-                    return Ok(false);
+                    verify_ok = false;
+                    error!("verify sector {} failed 1", sector_id);
+                    continue;
                 }
 
                 ensure!(
@@ -432,7 +435,9 @@ impl<'a, Tree: 'a + MerkleTreeTrait> ProofScheme<'a> for FallbackPoSt<'a, Tree> 
 
                     // validate all comm_r_lasts match
                     if inclusion_proof.root() != comm_r_last {
-                        return Ok(false);
+                        verify_ok = false;
+                        error!("verify sector {} failed 2", sector_id);
+                        break;
                     }
 
                     // validate the path length
@@ -440,17 +445,21 @@ impl<'a, Tree: 'a + MerkleTreeTrait> ProofScheme<'a> for FallbackPoSt<'a, Tree> 
                         inclusion_proof.expected_len(pub_params.sector_size as usize / NODE_SIZE);
 
                     if expected_path_length != inclusion_proof.path().len() {
-                        return Ok(false);
+                        verify_ok = false;
+                        error!("verify sector {} failed 3", sector_id);
+                        break;
                     }
 
                     if !inclusion_proof.validate(challenged_leaf_start as usize) {
-                        return Ok(false);
+                        verify_ok = false;
+                        error!("verify sector {} failed 4", sector_id);
+                        break;
                     }
                 }
             }
         }
 
-        Ok(true)
+        Ok(verify_ok)
     }
 
     fn satisfies_requirements(
